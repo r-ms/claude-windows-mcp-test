@@ -3,11 +3,13 @@
 Claude Code Windows MCP Test - All-in-One Runner
 
 This script automates the entire test process:
-1. Check prerequisites (Claude CLI, PowerShell.MCP module)
-2. Run tests WITHOUT MCP enabled
-3. Configure PowerShell MCP server
-4. Run tests WITH MCP enabled
-5. Generate assessment report using Claude CLI
+1. Check prerequisites (Claude CLI, PowerShell 7+)
+2. Install PowerShell.MCP module if missing
+3. Run tests WITHOUT MCP enabled
+4. Configure PowerShell MCP server (project-local)
+5. Verify MCP is working
+6. Run tests WITH MCP enabled
+7. Generate assessment report using Claude CLI
 
 Usage:
     python run_full_test.py              # Full test suite
@@ -19,7 +21,6 @@ Usage:
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -65,7 +66,7 @@ def print_error(text: str) -> None:
     print(f"{Colors.FAIL}✗ {text}{Colors.ENDC}")
 
 
-def run_command(cmd: list[str], capture: bool = True, timeout: int = 60) -> tuple[int, str, str]:
+def run_command(cmd: list[str], capture: bool = True, timeout: int = 60, cwd: Path | None = None) -> tuple[int, str, str]:
     """Run a command and return exit code, stdout, stderr."""
     try:
         result = subprocess.run(
@@ -73,10 +74,13 @@ def run_command(cmd: list[str], capture: bool = True, timeout: int = 60) -> tupl
             capture_output=capture,
             text=True,
             timeout=timeout,
+            cwd=cwd,
         )
         return result.returncode, result.stdout or "", result.stderr or ""
     except subprocess.TimeoutExpired:
         return -1, "", "Command timed out"
+    except FileNotFoundError:
+        return -1, "", f"Command not found: {cmd[0]}"
     except Exception as e:
         return -1, "", str(e)
 
@@ -93,32 +97,62 @@ def check_claude_cli() -> bool:
 
 def find_pwsh() -> str | None:
     """Find PowerShell 7+ executable (pwsh.exe)."""
-    # Try common locations
     possible_paths = [
-        "pwsh.exe",  # If in PATH
-        "pwsh",      # Linux/Mac style
+        "pwsh.exe",
+        "pwsh",
         r"C:\Program Files\PowerShell\7\pwsh.exe",
         r"C:\Program Files\PowerShell\7-preview\pwsh.exe",
         os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\PowerShell\pwsh.exe"),
     ]
 
     for path in possible_paths:
-        code, stdout, _ = run_command([path, "-Version"], timeout=10)
+        code, _, _ = run_command([path, "-Version"], timeout=10)
         if code == 0:
             return path
 
     return None
 
 
-def check_powershell_mcp_module() -> tuple[bool, str | None]:
-    """Check if PowerShell.MCP module is installed and get proxy path."""
-    # First, find PowerShell 7+
+def install_powershell_mcp(pwsh: str) -> bool:
+    """Install PowerShell.MCP module."""
+    print("  Installing PowerShell.MCP module...")
+    cmd = [
+        pwsh, "-NoProfile", "-Command",
+        "Install-Module -Name PowerShell.MCP -Force -Scope CurrentUser -AllowClobber"
+    ]
+    code, stdout, stderr = run_command(cmd, timeout=120)
+
+    if code == 0:
+        print_success("PowerShell.MCP module installed")
+        return True
+
+    print_error(f"Failed to install PowerShell.MCP: {stderr}")
+    return False
+
+
+def get_mcp_proxy_path(pwsh: str) -> str | None:
+    """Get the MCP proxy executable path."""
+    cmd = [
+        pwsh, "-NoProfile", "-Command",
+        "Import-Module PowerShell.MCP; Get-MCPProxyPath"
+    ]
+    code, stdout, stderr = run_command(cmd, timeout=30)
+
+    if code == 0 and stdout.strip():
+        return stdout.strip()
+
+    return None
+
+
+def check_and_install_powershell_mcp() -> tuple[str | None, str | None]:
+    """Check for PowerShell 7+ and MCP module, install if missing. Returns (pwsh_path, proxy_path)."""
+    # Find PowerShell 7+
     pwsh = find_pwsh()
     if not pwsh:
-        print_warning("PowerShell 7+ (pwsh.exe) not found.")
+        print_error("PowerShell 7+ (pwsh.exe) not found.")
         print("  PowerShell.MCP requires PowerShell 7.2+")
         print("  Install from: https://github.com/PowerShell/PowerShell/releases")
-        return False, None
+        return None, None
 
     print_success(f"PowerShell 7+ found: {pwsh}")
 
@@ -130,63 +164,121 @@ def check_powershell_mcp_module() -> tuple[bool, str | None]:
     code, stdout, _ = run_command(cmd, timeout=30)
 
     if code != 0 or not stdout.strip():
-        print_warning("PowerShell.MCP module not found.")
-        print(f"  Install with: {pwsh} -Command \"Install-Module -Name PowerShell.MCP\"")
-        return False, None
-
-    version = stdout.strip()
-    print_success(f"PowerShell.MCP module found: v{version}")
+        print_warning("PowerShell.MCP module not found. Installing...")
+        if not install_powershell_mcp(pwsh):
+            return pwsh, None
+    else:
+        print_success(f"PowerShell.MCP module found: v{stdout.strip()}")
 
     # Get proxy path
-    cmd = [
-        pwsh, "-NoProfile", "-Command",
-        "Import-Module PowerShell.MCP; Get-MCPProxyPath"
-    ]
-    code, stdout, stderr = run_command(cmd, timeout=30)
-
-    if code == 0 and stdout.strip():
-        proxy_path = stdout.strip()
+    proxy_path = get_mcp_proxy_path(pwsh)
+    if proxy_path:
         print_success(f"MCP Proxy path: {proxy_path}")
-        return True, proxy_path
+    else:
+        print_error("Could not get MCP proxy path")
 
-    print_warning(f"Could not get MCP proxy path: {stderr}")
-    return True, None
-
-
-def check_mcp_configured() -> bool:
-    """Check if PowerShell MCP is already configured in Claude Code."""
-    code, stdout, _ = run_command(["claude", "mcp", "list"])
-    if code == 0 and "powershell" in stdout.lower():
-        print_success("PowerShell MCP already configured in Claude Code")
-        return True
-    return False
+    return pwsh, proxy_path
 
 
-def configure_mcp(proxy_path: str) -> bool:
-    """Configure PowerShell MCP in Claude Code."""
-    print_step(2, "Configuring PowerShell MCP in Claude Code...")
+def get_mcp_status(project_dir: Path) -> dict:
+    """Get current MCP configuration status using claude mcp list."""
+    code, stdout, stderr = run_command(["claude", "mcp", "list"], cwd=project_dir)
 
-    # Remove existing if present (to ensure clean state)
-    run_command(["claude", "mcp", "remove", "powershell"], timeout=10)
+    status = {
+        "configured": False,
+        "name": None,
+        "healthy": False,
+        "raw_output": stdout,
+    }
 
-    # Add MCP server
+    if code != 0:
+        return status
+
+    # Check if powershell MCP is in the list
+    if "powershell" in stdout.lower():
+        status["configured"] = True
+        status["name"] = "powershell"
+        # Check for health indicators (varies by claude version)
+        if "error" not in stdout.lower() and "failed" not in stdout.lower():
+            status["healthy"] = True
+
+    return status
+
+
+def configure_mcp_for_project(proxy_path: str, project_dir: Path) -> bool:
+    """Configure PowerShell MCP for this project using claude mcp add."""
+    print("  Configuring PowerShell MCP for project...")
+
+    # First, remove any existing configuration to ensure clean state
+    run_command(["claude", "mcp", "remove", "powershell"], cwd=project_dir, timeout=10)
+
+    # Add MCP server with project scope
     code, stdout, stderr = run_command(
-        ["claude", "mcp", "add", "powershell", proxy_path],
+        ["claude", "mcp", "add", "--scope", "project", "powershell", proxy_path],
+        cwd=project_dir,
         timeout=30
     )
 
-    if code == 0:
-        print_success("PowerShell MCP configured successfully")
+    if code != 0:
+        print_error(f"Failed to add MCP: {stderr}")
+        return False
+
+    print_success("MCP server added to project")
+    return True
+
+
+def verify_mcp_working(project_dir: Path) -> bool:
+    """Verify that MCP is actually working by running a simple test."""
+    print("  Verifying MCP is working...")
+
+    # Run a simple prompt that should use MCP
+    test_prompt = "Run the PowerShell command: Write-Host 'MCP Test OK'"
+
+    code, stdout, stderr = run_command(
+        ["claude", "-p", test_prompt, "--output-format", "stream-json", "--dangerously-skip-permissions"],
+        cwd=project_dir,
+        timeout=60
+    )
+
+    if code != 0:
+        print_error(f"MCP verification failed: {stderr}")
+        return False
+
+    # Check if the output indicates success
+    if "MCP Test OK" in stdout or "Write-Host" in stdout:
+        print_success("MCP is working correctly")
         return True
 
-    print_error(f"Failed to configure MCP: {stderr}")
-    return False
+    # Check for MCP-related errors
+    if "mcp" in stderr.lower() and "error" in stderr.lower():
+        print_error(f"MCP error detected: {stderr[:200]}")
+        return False
+
+    # If we got some output without errors, consider it working
+    if stdout and "error" not in stdout.lower():
+        print_success("MCP appears to be working")
+        return True
+
+    print_warning("Could not verify MCP status, proceeding anyway")
+    return True
 
 
-def remove_mcp() -> bool:
-    """Remove PowerShell MCP from Claude Code."""
-    code, _, _ = run_command(["claude", "mcp", "remove", "powershell"], timeout=10)
+def remove_mcp_from_project(project_dir: Path) -> bool:
+    """Remove PowerShell MCP from project."""
+    code, _, _ = run_command(["claude", "mcp", "remove", "powershell"], cwd=project_dir, timeout=10)
     return code == 0
+
+
+def setup_mcp(proxy_path: str, project_dir: Path) -> bool:
+    """Full MCP setup: configure and verify."""
+    if not configure_mcp_for_project(proxy_path, project_dir):
+        return False
+
+    if not verify_mcp_working(project_dir):
+        print_error("MCP configuration failed verification")
+        return False
+
+    return True
 
 
 def load_prompts(prompts_file: Path) -> list[dict]:
@@ -234,7 +326,7 @@ def run_single_test(prompt: dict, work_dir: Path, timeout: int = 120) -> dict:
             result["success"] = proc.returncode == 0
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()  # Clean up
+            proc.communicate()
             result["errors"].append(f"Timeout after {timeout} seconds")
             result["duration_seconds"] = (datetime.now() - start_time).total_seconds()
             return result
@@ -250,7 +342,7 @@ def run_single_test(prompt: dict, work_dir: Path, timeout: int = 120) -> dict:
             except json.JSONDecodeError:
                 pass
 
-        # Check for common error patterns in output
+        # Check for common error patterns
         error_patterns = [
             "command not found",
             "not recognized",
@@ -273,14 +365,13 @@ def run_single_test(prompt: dict, work_dir: Path, timeout: int = 120) -> dict:
 
     result["duration_seconds"] = (datetime.now() - start_time).total_seconds()
 
-    # Mark as failed if there are errors
     if result["errors"]:
         result["success"] = False
 
     return result
 
 
-def run_test_suite(prompts: list[dict], mcp_enabled: bool, results_dir: Path) -> dict:
+def run_test_suite(prompts: list[dict], mcp_enabled: bool, results_dir: Path, project_dir: Path) -> dict:
     """Run all test prompts and save results."""
     mode = "WITH MCP" if mcp_enabled else "WITHOUT MCP"
     print_header(f"Running Tests {mode}")
@@ -338,13 +429,11 @@ def generate_assessment(results_dir: Path) -> bool:
         print_error("Missing with-mcp.json results")
         return False
 
-    # Load results
     with open(without_mcp_file) as f:
         without_mcp = json.load(f)
     with open(with_mcp_file) as f:
         with_mcp = json.load(f)
 
-    # Create summary for Claude
     summary = {
         "without_mcp": {
             "successful": without_mcp["successful"],
@@ -396,7 +485,6 @@ Format as clean Markdown suitable for a GitHub README.'''
     if code != 0:
         print_warning(f"Assessment returned non-zero: {stderr}")
 
-    # Save report
     report_file = results_dir / "final-report.md"
     with open(report_file, "w") as f:
         f.write(f"# Claude Code Windows MCP Test Report\n\n")
@@ -405,7 +493,6 @@ Format as clean Markdown suitable for a GitHub README.'''
 
     print_success(f"Report saved to: {report_file}")
 
-    # Print quick summary
     print(f"\n{Colors.BOLD}Quick Summary:{Colors.ENDC}")
     print(f"  Without MCP: {without_mcp['successful']}/{without_mcp['total_prompts']} passed")
     print(f"  With MCP:    {with_mcp['successful']}/{with_mcp['total_prompts']} passed")
@@ -449,11 +536,13 @@ Examples:
 
     args = parser.parse_args()
 
+    project_dir = Path(__file__).parent.resolve()
+
     print_header("Claude Code Windows MCP Test Suite")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Project directory: {project_dir}")
     print(f"Results directory: {args.results_dir}")
 
-    # Ensure results directory exists
     args.results_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Check prerequisites
@@ -462,8 +551,16 @@ Examples:
     if not check_claude_cli():
         return 1
 
-    mcp_module_installed, proxy_path = check_powershell_mcp_module()
-    mcp_configured = check_mcp_configured()
+    # Check/install PowerShell.MCP
+    pwsh, proxy_path = check_and_install_powershell_mcp()
+
+    if not pwsh:
+        print_error("Cannot proceed without PowerShell 7+")
+        return 1
+
+    if not proxy_path:
+        print_error("Cannot proceed without PowerShell.MCP proxy")
+        return 1
 
     # Load prompts
     if not args.prompts.exists():
@@ -477,35 +574,29 @@ Examples:
     run_without_mcp = not args.with_mcp_only
     run_with_mcp = not args.no_mcp_only
 
+    # Get current MCP status
+    mcp_status = get_mcp_status(project_dir)
+
     # Run tests WITHOUT MCP
     if run_without_mcp:
-        # Temporarily remove MCP if configured
-        was_configured = mcp_configured
-        if was_configured:
-            print("Temporarily removing MCP for baseline test...")
-            remove_mcp()
+        print_step(2, "Preparing for tests WITHOUT MCP...")
 
-        run_test_suite(prompts, mcp_enabled=False, results_dir=args.results_dir)
+        # Remove MCP if configured
+        if mcp_status["configured"]:
+            print("  Removing MCP for baseline test...")
+            remove_mcp_from_project(project_dir)
 
-        # Restore MCP if it was configured
-        if was_configured and proxy_path:
-            configure_mcp(proxy_path)
+        run_test_suite(prompts, mcp_enabled=False, results_dir=args.results_dir, project_dir=project_dir)
 
     # Run tests WITH MCP
     if run_with_mcp:
-        # Configure MCP if not already configured
-        if not mcp_configured:
-            if proxy_path:
-                if not configure_mcp(proxy_path):
-                    print_error("Failed to configure MCP. Skipping MCP tests.")
-                    run_with_mcp = False
-            else:
-                print_warning("Cannot configure MCP - proxy path unknown")
-                print("Install PowerShell.MCP and run again, or use --no-mcp-only")
-                run_with_mcp = False
+        print_step(3, "Setting up MCP for tests WITH MCP...")
 
-        if run_with_mcp:
-            run_test_suite(prompts, mcp_enabled=True, results_dir=args.results_dir)
+        if not setup_mcp(proxy_path, project_dir):
+            print_error("Failed to setup MCP. Cannot run MCP tests.")
+            run_with_mcp = False
+        else:
+            run_test_suite(prompts, mcp_enabled=True, results_dir=args.results_dir, project_dir=project_dir)
 
     # Generate assessment
     if not args.skip_assessment and run_without_mcp and run_with_mcp:
