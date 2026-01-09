@@ -73,6 +73,8 @@ def run_command(cmd: list[str], capture: bool = True, timeout: int = 60, cwd: Pa
             cmd,
             capture_output=capture,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             cwd=cwd,
         )
@@ -315,6 +317,8 @@ def run_single_test(prompt: dict, work_dir: Path, timeout: int = 120) -> dict:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             cwd=work_dir,
         )
 
@@ -326,8 +330,15 @@ def run_single_test(prompt: dict, work_dir: Path, timeout: int = 120) -> dict:
             result["success"] = proc.returncode == 0
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            try:
+                proc.communicate(timeout=5)
+            except Exception:
+                pass
             result["errors"].append(f"Timeout after {timeout} seconds")
+            result["duration_seconds"] = (datetime.now() - start_time).total_seconds()
+            return result
+        except Exception as e:
+            result["errors"].append(f"Communication error: {type(e).__name__}: {str(e)[:100]}")
             result["duration_seconds"] = (datetime.now() - start_time).total_seconds()
             return result
 
