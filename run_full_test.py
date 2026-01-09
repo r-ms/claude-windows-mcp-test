@@ -91,18 +91,47 @@ def check_claude_cli() -> bool:
     return False
 
 
+def find_pwsh() -> str | None:
+    """Find PowerShell 7+ executable (pwsh.exe)."""
+    # Try common locations
+    possible_paths = [
+        "pwsh.exe",  # If in PATH
+        "pwsh",      # Linux/Mac style
+        r"C:\Program Files\PowerShell\7\pwsh.exe",
+        r"C:\Program Files\PowerShell\7-preview\pwsh.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\PowerShell\pwsh.exe"),
+    ]
+
+    for path in possible_paths:
+        code, stdout, _ = run_command([path, "-Version"], timeout=10)
+        if code == 0:
+            return path
+
+    return None
+
+
 def check_powershell_mcp_module() -> tuple[bool, str | None]:
     """Check if PowerShell.MCP module is installed and get proxy path."""
+    # First, find PowerShell 7+
+    pwsh = find_pwsh()
+    if not pwsh:
+        print_warning("PowerShell 7+ (pwsh.exe) not found.")
+        print("  PowerShell.MCP requires PowerShell 7.2+")
+        print("  Install from: https://github.com/PowerShell/PowerShell/releases")
+        return False, None
+
+    print_success(f"PowerShell 7+ found: {pwsh}")
+
     # Check if module is installed
     cmd = [
-        "powershell.exe", "-NoProfile", "-Command",
+        pwsh, "-NoProfile", "-Command",
         "Get-InstalledModule -Name PowerShell.MCP -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Version"
     ]
     code, stdout, _ = run_command(cmd, timeout=30)
 
     if code != 0 or not stdout.strip():
         print_warning("PowerShell.MCP module not found.")
-        print("  Install with: Install-Module -Name PowerShell.MCP")
+        print(f"  Install with: {pwsh} -Command \"Install-Module -Name PowerShell.MCP\"")
         return False, None
 
     version = stdout.strip()
@@ -110,7 +139,7 @@ def check_powershell_mcp_module() -> tuple[bool, str | None]:
 
     # Get proxy path
     cmd = [
-        "powershell.exe", "-NoProfile", "-Command",
+        pwsh, "-NoProfile", "-Command",
         "Import-Module PowerShell.MCP; Get-MCPProxyPath"
     ]
     code, stdout, stderr = run_command(cmd, timeout=30)
@@ -185,31 +214,39 @@ def run_single_test(prompt: dict, work_dir: Path, timeout: int = 120) -> dict:
     start_time = datetime.now()
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [
                 "claude", "-p", prompt["text"],
                 "--output-format", "stream-json",
                 "--dangerously-skip-permissions",
             ],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             cwd=work_dir,
         )
 
-        result["exit_code"] = proc.returncode
-        result["stdout"] = proc.stdout
-        result["stderr"] = proc.stderr
-        result["success"] = proc.returncode == 0
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+            result["exit_code"] = proc.returncode
+            result["stdout"] = stdout or ""
+            result["stderr"] = stderr or ""
+            result["success"] = proc.returncode == 0
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()  # Clean up
+            result["errors"].append(f"Timeout after {timeout} seconds")
+            result["duration_seconds"] = (datetime.now() - start_time).total_seconds()
+            return result
 
         # Extract errors from stream-json output
-        for line in proc.stdout.split('\n'):
+        for line in result["stdout"].split('\n'):
             if not line.strip():
                 continue
             try:
                 event = json.loads(line)
                 if event.get("type") == "tool_result" and event.get("is_error"):
-                    result["errors"].append(event.get("content", "Unknown error"))
+                    result["errors"].append(event.get("content", "Unknown error")[:200])
             except json.JSONDecodeError:
                 pass
 
@@ -223,14 +260,16 @@ def run_single_test(prompt: dict, work_dir: Path, timeout: int = 120) -> dict:
             "Exit code",
         ]
         for pattern in error_patterns:
-            if pattern.lower() in proc.stdout.lower() or pattern.lower() in proc.stderr.lower():
+            if pattern.lower() in result["stdout"].lower() or pattern.lower() in result["stderr"].lower():
                 if not any(pattern.lower() in e.lower() for e in result["errors"]):
                     result["errors"].append(f"Pattern detected: {pattern}")
 
-    except subprocess.TimeoutExpired:
-        result["errors"].append(f"Timeout after {timeout} seconds")
+    except FileNotFoundError:
+        result["errors"].append("Claude CLI not found")
+    except OSError as e:
+        result["errors"].append(f"OS error: {e}")
     except Exception as e:
-        result["errors"].append(str(e))
+        result["errors"].append(f"Unexpected error: {type(e).__name__}: {str(e)[:100]}")
 
     result["duration_seconds"] = (datetime.now() - start_time).total_seconds()
 
