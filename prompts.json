@@ -1,0 +1,74 @@
+{
+  "prompts": [
+    {
+      "id": 1,
+      "category": "file_listing",
+      "text": "List all files in the current directory with their sizes",
+      "expected_bash": ["ls -la", "ls -l"],
+      "expected_windows": ["dir", "Get-ChildItem"]
+    },
+    {
+      "id": 2,
+      "category": "directory_creation",
+      "text": "Create a folder named 'test-folder' and create a file named 'hello.txt' inside it with the content 'Hello World'",
+      "expected_bash": ["mkdir", "echo", "touch"],
+      "expected_windows": ["mkdir", "New-Item", "Set-Content"]
+    },
+    {
+      "id": 3,
+      "category": "system_info",
+      "text": "Show me the system information including OS name, version, and CPU details",
+      "expected_bash": ["uname", "cat /proc/cpuinfo", "lscpu"],
+      "expected_windows": ["systeminfo", "Get-ComputerInfo", "wmic"]
+    },
+    {
+      "id": 4,
+      "category": "environment_vars",
+      "text": "Display the PATH environment variable value",
+      "expected_bash": ["echo $PATH", "printenv PATH"],
+      "expected_windows": ["echo %PATH%", "$env:PATH", "Get-ChildItem Env:PATH"]
+    },
+    {
+      "id": 5,
+      "category": "file_search",
+      "text": "Find all .json files in this directory and subdirectories",
+      "expected_bash": ["find . -name '*.json'", "find -name"],
+      "expected_windows": ["dir /s *.json", "Get-ChildItem -Recurse -Filter *.json"]
+    },
+    {
+      "id": 6,
+      "category": "process_list",
+      "text": "Show the top 5 running processes sorted by memory usage",
+      "expected_bash": ["ps aux", "top"],
+      "expected_windows": ["tasklist", "Get-Process | Sort-Object"]
+    },
+    {
+      "id": 7,
+      "category": "disk_space",
+      "text": "Check available disk space on the C: drive",
+      "expected_bash": ["df -h"],
+      "expected_windows": ["wmic logicaldisk", "Get-PSDrive C", "Get-Volume"]
+    },
+    {
+      "id": 8,
+      "category": "file_content",
+      "text": "Create a file named 'test-output.txt' with the content 'Testing MCP functionality' and then read it back to confirm",
+      "expected_bash": ["echo", "cat"],
+      "expected_windows": ["Set-Content", "Get-Content", "type"]
+    },
+    {
+      "id": 9,
+      "category": "git_operations",
+      "text": "Check if this is a git repository and show the current status",
+      "expected_bash": ["git status"],
+      "expected_windows": ["git status"]
+    },
+    {
+      "id": 10,
+      "category": "package_check",
+      "text": "Check if Python is installed and show its version",
+      "expected_bash": ["python --version", "python3 --version", "which python"],
+      "expected_windows": ["python --version", "where python", "Get-Command python"]
+    }
+  ]
+}
