@@ -9,8 +9,9 @@ class Prompt(BaseModel):
     id: int
     category: str
     text: str
-    expected_bash: list[str] = Field(default_factory=list)
-    expected_windows: list[str] = Field(default_factory=list)
+    triggers: str = ""  # Description of what error this prompt triggers
+    expected_bash_failure: str = ""  # Expected failure when run without MCP
+    expected_windows: list[str] = Field(default_factory=list)  # Expected Windows commands
 
 
 class PromptsConfig(BaseModel):

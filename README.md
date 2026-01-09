@@ -2,141 +2,131 @@
 
 A test project to evaluate Claude Code's behavior on Windows with and without PowerShell MCP installed.
 
-## Background
+## The Problem
 
-Claude Code on Windows runs inside Git Bash, which can cause issues when Claude generates bash-style commands (like `ls -la`, `cat`, `find`) that don't work natively on Windows. The [PowerShell.MCP](https://www.powershellgallery.com/packages/PowerShell.MCP) module provides a PowerShell MCP server that gives Claude access to native Windows commands.
+Claude Code on Windows runs inside Git Bash, which causes issues when Claude generates bash-style commands that don't work natively on Windows. Common failures include:
 
-This project tests whether installing PowerShell MCP improves Claude Code's reliability on Windows.
+| Error Type | Example |
+|------------|---------|
+| PowerShell `$_` escaping | `'extglob.ProcessName' is not recognized` |
+| Shell mismatch | `Get-Module: command not found` (in bash) |
+| Windows dir flags | `dir: cannot access '/s': No such file` |
+| Path escaping | `type: C:\\path\\file: not found` |
+
+The [PowerShell.MCP](https://www.powershellgallery.com/packages/PowerShell.MCP) module provides a PowerShell MCP server that gives Claude access to native Windows commands, potentially fixing these issues.
+
+## Quick Start
+
+```bash
+# Clone and install
+git clone https://github.com/r-ms/claude-windows-mcp-test.git
+cd claude-windows-mcp-test
+uv sync  # or: pip install -e .
+
+# Run the full test suite (does everything automatically)
+python run_full_test.py
+```
+
+That's it! The script will:
+1. Check if Claude CLI and PowerShell.MCP are installed
+2. Run 10 test prompts WITHOUT MCP
+3. Configure PowerShell MCP automatically
+4. Run the same 10 prompts WITH MCP
+5. Generate an assessment report comparing both runs
 
 ## Prerequisites
 
-- Windows 10/11
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv) (Python package manager)
-- Claude Code CLI installed and authenticated
-- PowerShell 7.2+ (for MCP testing)
+- **Windows 10/11**
+- **Python 3.11+**
+- **Claude Code CLI** - installed and authenticated
+- **PowerShell 7.2+** (for MCP)
 
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/claude-windows-mcp-test.git
-cd claude-windows-mcp-test
-
-# Install dependencies with uv
-uv sync
-```
-
-## Installing PowerShell MCP
-
-Before running the "with MCP" tests, install and configure PowerShell MCP:
+### Installing PowerShell.MCP (Optional - script will guide you)
 
 ```powershell
-# Install the PowerShell module
 Install-Module -Name PowerShell.MCP
-
-# Get the proxy path
-Import-Module PowerShell.MCP
-Get-MCPProxyPath -Escape
 ```
 
-Then add it to Claude Code:
+## Usage Options
 
 ```bash
-# Replace the path with your actual PowerShell.MCP.Proxy.exe path
-claude mcp add powershell "C:\Users\YOUR_USER\...\PowerShell.MCP.Proxy.exe"
+# Full test suite (recommended)
+python run_full_test.py
 
-# Verify it's added
-claude mcp list
-```
+# Only run without MCP (baseline)
+python run_full_test.py --no-mcp-only
 
-## Usage
+# Only run with MCP (assumes already configured)
+python run_full_test.py --with-mcp-only
 
-### Run Tests Without MCP
+# Skip the Claude-generated report
+python run_full_test.py --skip-assessment
 
-```bash
-uv run python -m claude_mcp_test.runner --no-mcp
-```
-
-### Configure and Run Tests With MCP
-
-1. Make sure PowerShell MCP is configured (see above)
-2. Run the tests:
-
-```bash
-uv run python -m claude_mcp_test.runner --with-mcp
-```
-
-### Generate Assessment Report
-
-After running both test sets:
-
-```bash
-# Full assessment using Claude CLI
-uv run python -m claude_mcp_test.assessor
-
-# Or quick summary (no Claude CLI needed)
-uv run python -m claude_mcp_test.assessor --quick
-```
-
-### Full Test Suite
-
-Run everything in sequence:
-
-```bash
-# 1. Run without MCP
-uv run python -m claude_mcp_test.runner --no-mcp
-
-# 2. Configure PowerShell MCP (if not already done)
-# 3. Run with MCP
-uv run python -m claude_mcp_test.runner --with-mcp
-
-# 4. Generate report
-uv run python -m claude_mcp_test.assessor
+# Custom timeout per prompt
+python run_full_test.py --timeout 180
 ```
 
 ## Test Prompts
 
-The test suite includes 10 prompts covering common operations:
+The test suite includes 10 prompts specifically designed to trigger common Windows/bash compatibility issues:
 
-| # | Category | Prompt |
-|---|----------|--------|
-| 1 | File Listing | List all files with sizes |
-| 2 | Directory Creation | Create folder and file |
-| 3 | System Info | Show OS, CPU, memory details |
-| 4 | Environment Vars | Display PATH variable |
-| 5 | File Search | Find .json files recursively |
-| 6 | Process List | Top 5 processes by memory |
-| 7 | Disk Space | Check C: drive space |
-| 8 | File Content | Create and read a file |
-| 9 | Git Operations | Check git status |
-| 10 | Package Check | Verify Python installation |
+| # | Category | What It Tests |
+|---|----------|---------------|
+| 1 | PowerShell `$_` escaping | Filter processes → triggers `extglob` error |
+| 2 | Shell mismatch | Get-Module → fails in bash shell |
+| 3 | Windows paths | Read hosts file → backslash escaping |
+| 4 | dir confusion | Recursive file list → `/s` vs find |
+| 5 | Env var syntax | USERPROFILE → `$env:` vs `$` vs `%` |
+| 6 | PowerShell pipeline | Sort files by size → Sort-Object |
+| 7 | Windows services | List services → Get-Service |
+| 8 | PATH check | Find Python → where vs which |
+| 9 | File creation | Create with date → Set-Content vs echo |
+| 10 | Network test | Ping → Test-Connection vs ping |
+
+These prompts are based on **real errors** found in actual Claude Code sessions on Windows.
 
 ## Output
 
 Results are saved to the `results/` directory:
 
-- `without-mcp.json` - Raw test results without MCP
-- `with-mcp.json` - Raw test results with MCP
-- `final-report.md` - Claude-generated analysis comparing both runs
-
-## How It Works
-
-1. **Runner** (`runner.py`): Executes each prompt using `claude -p` with `--output-format stream-json` and `--dangerously-skip-permissions`
-2. **Detection**: Analyzes commands for bash-style (`ls`, `cat`, `find`) vs Windows-style (`Get-ChildItem`, `dir`, `Get-Content`) patterns
-3. **Assessment** (`assessor.py`): Uses Claude CLI to analyze both result sets and generate a comparative report
+```
+results/
+├── without-mcp.json    # Raw results without MCP
+├── with-mcp.json       # Raw results with MCP
+├── final-report.md     # Claude-generated analysis
+└── workdir/            # Temporary test files
+```
 
 ## Expected Results
 
-Without PowerShell MCP, Claude Code may:
-- Generate bash commands that fail on Windows
+**Without PowerShell MCP**, Claude Code may:
+- Generate bash commands that fail on Windows (`ls -la`, `cat`, `find`)
 - Use Unix paths (`/proc/cpuinfo`) that don't exist
 - Miss environment variable syntax (`$PATH` vs `$env:PATH`)
+- Fail PowerShell cmdlet calls due to `$_` escaping issues
 
-With PowerShell MCP, Claude Code should:
+**With PowerShell MCP**, Claude Code should:
 - Use native Windows/PowerShell commands
-- Have better success rates
+- Have higher success rates
 - Produce more reliable output
+
+## Project Structure
+
+```
+claude-windows-mcp-test/
+├── run_full_test.py          # All-in-one test runner
+├── prompts.json              # Test prompts configuration
+├── pyproject.toml            # Python project config
+├── src/claude_mcp_test/      # Library code
+│   ├── runner.py             # Individual test runner
+│   ├── assessor.py           # Report generator
+│   └── models.py             # Data models
+└── results/                  # Test output
+```
+
+## Contributing
+
+Found more error patterns? Add them to `prompts.json` and submit a PR!
 
 ## License
 

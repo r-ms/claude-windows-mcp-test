@@ -2,73 +2,83 @@
   "prompts": [
     {
       "id": 1,
-      "category": "file_listing",
-      "text": "List all files in the current directory with their sizes",
-      "expected_bash": ["ls -la", "ls -l"],
-      "expected_windows": ["dir", "Get-ChildItem"]
+      "category": "powershell_variable_escaping",
+      "text": "List all running processes and filter to show only those with 'python' in the name",
+      "triggers": "$_.ProcessName pattern - causes extglob escaping error in bash",
+      "expected_bash_failure": "Get-Process with Where-Object fails when $_ becomes extglob",
+      "expected_windows": ["Get-Process", "Where-Object", "tasklist"]
     },
     {
       "id": 2,
-      "category": "directory_creation",
-      "text": "Create a folder named 'test-folder' and create a file named 'hello.txt' inside it with the content 'Hello World'",
-      "expected_bash": ["mkdir", "echo", "touch"],
-      "expected_windows": ["mkdir", "New-Item", "Set-Content"]
+      "category": "powershell_cmdlets_in_bash",
+      "text": "Check what PowerShell modules are currently installed on this system",
+      "triggers": "Get-Module cmdlet - fails if run in bash shell",
+      "expected_bash_failure": "Get-Module: command not found (exit code 127)",
+      "expected_windows": ["Get-Module", "Get-InstalledModule"]
     },
     {
       "id": 3,
-      "category": "system_info",
-      "text": "Show me the system information including OS name, version, and CPU details",
-      "expected_bash": ["uname", "cat /proc/cpuinfo", "lscpu"],
-      "expected_windows": ["systeminfo", "Get-ComputerInfo", "wmic"]
+      "category": "windows_path_escaping",
+      "text": "Read the contents of C:\\Windows\\System32\\drivers\\etc\\hosts file",
+      "triggers": "Windows backslash paths in bash context",
+      "expected_bash_failure": "Path escaping issues with backslashes",
+      "expected_windows": ["Get-Content", "type"]
     },
     {
       "id": 4,
-      "category": "environment_vars",
-      "text": "Display the PATH environment variable value",
-      "expected_bash": ["echo $PATH", "printenv PATH"],
-      "expected_windows": ["echo %PATH%", "$env:PATH", "Get-ChildItem Env:PATH"]
+      "category": "dir_command_confusion",
+      "text": "List all .txt files recursively in the current directory with full paths",
+      "triggers": "dir /s vs find - different shells interpret differently",
+      "expected_bash_failure": "dir: cannot access '/s': No such file or directory",
+      "expected_windows": ["Get-ChildItem -Recurse", "dir /s"]
     },
     {
       "id": 5,
-      "category": "file_search",
-      "text": "Find all .json files in this directory and subdirectories",
-      "expected_bash": ["find . -name '*.json'", "find -name"],
-      "expected_windows": ["dir /s *.json", "Get-ChildItem -Recurse -Filter *.json"]
+      "category": "environment_variable_syntax",
+      "text": "Display the value of the USERPROFILE environment variable",
+      "triggers": "$env:VAR vs $VAR vs %VAR% syntax confusion",
+      "expected_bash_failure": "Wrong syntax for environment variable expansion",
+      "expected_windows": ["$env:USERPROFILE", "echo %USERPROFILE%"]
     },
     {
       "id": 6,
-      "category": "process_list",
-      "text": "Show the top 5 running processes sorted by memory usage",
-      "expected_bash": ["ps aux", "top"],
-      "expected_windows": ["tasklist", "Get-Process | Sort-Object"]
+      "category": "powershell_pipeline",
+      "text": "Get the 5 largest files in the current directory sorted by size descending",
+      "triggers": "PowerShell pipeline with Sort-Object, Select-Object",
+      "expected_bash_failure": "PowerShell cmdlets fail in bash, or ls with complex sorting",
+      "expected_windows": ["Get-ChildItem", "Sort-Object", "Select-Object"]
     },
     {
       "id": 7,
-      "category": "disk_space",
-      "text": "Check available disk space on the C: drive",
-      "expected_bash": ["df -h"],
-      "expected_windows": ["wmic logicaldisk", "Get-PSDrive C", "Get-Volume"]
+      "category": "windows_service_query",
+      "text": "List all Windows services that are currently running",
+      "triggers": "Get-Service cmdlet - Windows-specific operation",
+      "expected_bash_failure": "Get-Service: command not found or systemctl not available",
+      "expected_windows": ["Get-Service", "sc query"]
     },
     {
       "id": 8,
-      "category": "file_content",
-      "text": "Create a file named 'test-output.txt' with the content 'Testing MCP functionality' and then read it back to confirm",
-      "expected_bash": ["echo", "cat"],
-      "expected_windows": ["Set-Content", "Get-Content", "type"]
+      "category": "system_path_check",
+      "text": "Check if Python is in the system PATH and show where it is located",
+      "triggers": "where vs which command differences",
+      "expected_bash_failure": "which python may fail or give wrong path on Windows",
+      "expected_windows": ["where python", "Get-Command python", "$env:PATH"]
     },
     {
       "id": 9,
-      "category": "git_operations",
-      "text": "Check if this is a git repository and show the current status",
-      "expected_bash": ["git status"],
-      "expected_windows": ["git status"]
+      "category": "file_creation_with_content",
+      "text": "Create a file named 'test-output.log' with today's date and current username as content",
+      "triggers": "Set-Content vs echo, date command differences between shells",
+      "expected_bash_failure": "date format differences, echo syntax issues",
+      "expected_windows": ["Set-Content", "Get-Date", "$env:USERNAME"]
     },
     {
       "id": 10,
-      "category": "package_check",
-      "text": "Check if Python is installed and show its version",
-      "expected_bash": ["python --version", "python3 --version", "which python"],
-      "expected_windows": ["python --version", "where python", "Get-Command python"]
+      "category": "network_diagnostics",
+      "text": "Check if google.com is reachable and show the response time",
+      "triggers": "ping command differences and Test-Connection",
+      "expected_bash_failure": "ping syntax differences between Windows and Unix",
+      "expected_windows": ["Test-Connection", "ping"]
     }
   ]
 }
